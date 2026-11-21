@@ -1,0 +1,6 @@
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:30.1000000Z modules/region/alb.tf (terraform)
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:30.1000001Z Tests: 4 (SUCCESSES: 0, FAILURES: 4)
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:30.1000002Z Failures: 4 (HIGH: 4, CRITICAL: 0)
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:30.1000003Z AWS-0053 (HIGH): Load balancer is exposed publicly.
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:30.1000004Z AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+iac-scan	Trivy misconfiguration scan	2026-11-20T23:19:31.0000000Z ##[error]Process completed with exit code 1.

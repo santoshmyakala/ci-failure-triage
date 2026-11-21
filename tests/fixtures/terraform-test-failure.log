@@ -1,0 +1,6 @@
+tests/region.tftest.hcl... in progress
+  run "zonal_isolation"... pass
+  run "standby_is_warm_not_cold"... fail
+Error: Test assertion failed
+  on tests/region.tftest.hcl line 298, in run "standby_is_warm_not_cold":
+Failure! 12 passed, 1 failed.

@@ -1,0 +1,5 @@
+[INFO] Running com.example.orders.OrderServiceTest
+Exception in thread "main" java.lang.OutOfMemoryError: Java heap space
+[ERROR] Tests run: 48, Failures: 3, Errors: 5, Skipped: 0
+[ERROR] There are test failures.
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test

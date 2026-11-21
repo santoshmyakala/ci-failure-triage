@@ -1,0 +1,67 @@
+name: CI failure triage
+description: Classify why a CI job failed (infrastructure, rate limit, OOM, flaky test, compile error, security gate…) from its log.
+branding:
+  icon: activity
+  color: orange
+inputs:
+  log-file:
+    description: Path to the log to triage. Leave empty to fetch the failed jobs of `run-id`.
+    required: false
+    default: ""
+  run-id:
+    description: Workflow run whose failed job logs should be triaged (default: the current run).
+    required: false
+    default: ${{ github.run_id }}
+  version:
+    description: Release tag of ci-failure-triage to use.
+    required: false
+    default: latest
+  rules:
+    description: Optional extra rule file (TOML).
+    required: false
+    default: ""
+outputs:
+  category:
+    description: Most likely root-cause category, or "unclassified".
+    value: ${{ steps.triage.outputs.category }}
+  retryable:
+    description: "true when re-running the job is a reasonable first response."
+    value: ${{ steps.triage.outputs.retryable }}
+runs:
+  using: composite
+  steps:
+    - name: Download the release binary (checksum-verified)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64) target=x86_64-unknown-linux-musl; ext=tar.gz ;;
+          macOS-ARM64) target=aarch64-apple-darwin; ext=tar.gz ;;
+          Windows-X64) target=x86_64-pc-windows-msvc; ext=zip ;;
+          *) echo "::error::unsupported runner ${RUNNER_OS}-${RUNNER_ARCH}"; exit 1 ;;
+        esac
+        tag=$([ "$VERSION" = latest ] && gh release view --repo santoshmyakala/ci-failure-triage --json tagName -q .tagName || echo "$VERSION")
+        cd "$RUNNER_TEMP"
+        gh release download "$tag" --repo santoshmyakala/ci-failure-triage --pattern "*${target}.${ext}" --pattern SHA256SUMS --clobber
+        grep "${target}.${ext}" SHA256SUMS | sha256sum -c -
+        if [ "$ext" = zip ]; then 7z x -y ./*.zip >/dev/null; else tar xzf ./*.tar.gz; fi
+        echo "$RUNNER_TEMP/$(ls -d ci-failure-triage-*/ | head -1)" >> "$GITHUB_PATH"
+    - name: Triage
+      id: triage
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        LOG_FILE: ${{ inputs.log-file }}
+        RUN_ID: ${{ inputs.run-id }}
+        RULES: ${{ inputs.rules }}
+      run: |
+        log="$LOG_FILE"
+        if [ -z "$log" ]; then log="$RUNNER_TEMP/failed.log"; gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > "$log" || true; fi
+        extra=(); [ -n "$RULES" ] && extra=(--rules "$RULES")
+        ci-failure-triage "$log" "${extra[@]}" --format markdown --no-exit-code >> "$GITHUB_STEP_SUMMARY"
+        ci-failure-triage "$log" "${extra[@]}" --format github --no-exit-code
+        json=$(ci-failure-triage "$log" "${extra[@]}" --format json --no-exit-code)
+        echo "category=$(jq -r .verdict.category <<<"$json")" >> "$GITHUB_OUTPUT"
+        echo "retryable=$(jq -r .verdict.retryable <<<"$json")" >> "$GITHUB_OUTPUT"

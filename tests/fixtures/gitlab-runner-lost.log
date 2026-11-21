@@ -1,0 +1,4 @@
+section_start:1732060000:prepare_executor[0K[0K[36;1mPreparing the "docker" executor[0;m
+section_end:1732060001:prepare_executor[0K
+Running tests...
+ERROR: Job failed (system failure): runner system failure: lost communication with the server

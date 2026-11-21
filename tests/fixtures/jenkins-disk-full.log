@@ -1,0 +1,5 @@
+[Pipeline] sh
++ docker build -t app .
+write /var/lib/docker/tmp/GetImageBlob123: no space left on device
+[Pipeline] End of Pipeline
+ERROR: script returned exit code 1

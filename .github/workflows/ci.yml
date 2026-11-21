@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked
+      - run: cargo test --locked
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-deny@0.18
+      - name: Licences, advisories (RustSec), banned and duplicate crates
+        run: cargo deny check
+
+  # Dogfooding: triage the tool's own fixtures with the release build and publish the verdicts.
+  self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --release --locked
+      - name: Triage every fixture into the job summary
+        shell: bash
+        run: |
+          for f in tests/fixtures/*.log; do
+            echo "#### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+            ./target/release/ci-failure-triage "$f" --format markdown --no-exit-code | sed 1d >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks (checksum-verified)
+        run: |
+          v=8.30.1; base=https://github.com/gitleaks/gitleaks/releases/download/v$v
+          curl -sSLO "$base/gitleaks_${v}_linux_x64.tar.gz"; curl -sSLO "$base/gitleaks_${v}_checksums.txt"
+          sha256sum --ignore-missing -c "gitleaks_${v}_checksums.txt"
+          tar xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
+          ./gitleaks git --redact --exit-code 1 .

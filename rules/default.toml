@@ -1,0 +1,297 @@
+# Default failure signatures. Each rule:
+#   id         stable identifier (category.name)
+#   category   infrastructure | rate-limit | out-of-memory | timeout | flaky-test | test-failure |
+#              compile-error | dependency | security-gate | configuration
+#   pattern    Rust regex, matched per normalised log line. Use (?-u:\b), not \b: a Unicode word
+#              boundary forces the slow regex engine on every line with non-ASCII text (~6x slower)
+#   weight     how strongly a match points at the root cause (root causes outweigh their symptoms)
+#   retryable  whether re-running the job is a reasonable first response
+#   hint       what to do next
+
+# ---------------------------------------------------------------- infrastructure (retry)
+[[rule]]
+id = "infrastructure.disk-full"
+category = "infrastructure"
+pattern = '(?i)no space left on device|disk quota exceeded'
+weight = 12
+retryable = true
+hint = "Runner disk is full. Clean caches/artifacts between steps or use a larger runner."
+
+[[rule]]
+id = "infrastructure.network-reset"
+category = "infrastructure"
+pattern = '(?i)connection reset by peer|ECONNRESET|broken pipe|connection timed out|i/o timeout|TLS handshake timeout'
+weight = 8
+retryable = true
+hint = "Transient network failure between the runner and a remote service. Retry; if it repeats, check proxies and egress limits."
+
+[[rule]]
+id = "infrastructure.dns"
+category = "infrastructure"
+pattern = '(?i)temporary failure in name resolution|could not resolve host|no such host|getaddrinfo (ENOTFOUND|EAI_AGAIN)'
+weight = 9
+retryable = true
+hint = "DNS resolution failed on the runner. Retry; persistent failures point at the runner's resolver or network policy."
+
+[[rule]]
+id = "infrastructure.runner-lost"
+category = "infrastructure"
+pattern = '(?i)the runner has received a shutdown signal|lost communication with the server|runner system failure|job was terminated|The hosted runner encountered an error'
+weight = 12
+retryable = true
+hint = "The runner itself went away (spot reclaim, host failure). Retry on another runner."
+
+[[rule]]
+id = "infrastructure.registry-5xx"
+category = "infrastructure"
+pattern = '(?i)(received unexpected HTTP status|status code|HTTP/\d(\.\d)?) ?:? ?(500|502|503|504)(?-u:\b)|503 Service Unavailable|502 Bad Gateway'
+weight = 7
+retryable = true
+hint = "A registry or remote API returned a server error. Retry with backoff."
+
+[[rule]]
+id = "infrastructure.docker-daemon"
+category = "infrastructure"
+pattern = '(?i)cannot connect to the docker daemon|error during connect.*docker'
+weight = 10
+retryable = true
+hint = "Docker is not available on the runner. Check the runner image / service container setup."
+
+# ---------------------------------------------------------------- rate limits (retry later)
+[[rule]]
+id = "rate-limit.http-429"
+category = "rate-limit"
+pattern = '(?i)toomanyrequests|too many requests|(?-u:\b)429(?-u:\b).*(rate|limit|requests)|rate limit (exceeded|reached)|secondary rate limit'
+weight = 11
+retryable = true
+hint = "Rate-limited by a registry or API (Docker Hub, GitHub, npm). Authenticate, cache, or mirror; retry after the reset window."
+
+# ---------------------------------------------------------------- resources
+[[rule]]
+id = "out-of-memory.killed"
+category = "out-of-memory"
+pattern = '(?i)OOMKilled|out of memory|Killed process \d+|exit code 137|signal: killed|exited with code 137'
+weight = 13
+retryable = false
+hint = "The process was killed for exceeding memory. Lower parallelism, raise the memory limit, or fix the leak; retrying rarely helps."
+
+[[rule]]
+id = "out-of-memory.jvm"
+category = "out-of-memory"
+pattern = 'java\.lang\.OutOfMemoryError|GC overhead limit exceeded'
+weight = 13
+retryable = false
+hint = "JVM heap exhausted. Raise -Xmx (or MaxRAMPercentage in containers) or reduce forked test JVMs."
+
+[[rule]]
+id = "out-of-memory.node"
+category = "out-of-memory"
+pattern = 'JavaScript heap out of memory|FATAL ERROR: Reached heap limit'
+weight = 13
+retryable = false
+hint = "Node.js heap exhausted. Set NODE_OPTIONS=--max-old-space-size or split the build."
+
+[[rule]]
+id = "timeout.job"
+category = "timeout"
+pattern = '(?i)exceeded the maximum execution time|job execution time exceeded|has exceeded the maximum execution time of|timed out after \d+ minutes|The job running on runner .* has exceeded'
+weight = 11
+retryable = false
+hint = "The job hit its timeout. Find the slow step (cache misses, hanging test); retry only if the slowness was external."
+
+# ---------------------------------------------------------------- tests
+[[rule]]
+id = "flaky-test.retried-pass"
+category = "flaky-test"
+pattern = '(?i)flaky|passed on retry|rerun \d+|test was retried'
+weight = 9
+retryable = true
+hint = "A test passed only on retry. Quarantine it and open a ticket; don't let flakiness hide real failures."
+
+[[rule]]
+id = "flaky-test.timing"
+category = "flaky-test"
+pattern = '(?i)(test|spec).*(timed out|timeout of \d+ ?ms exceeded)|context deadline exceeded.*test'
+weight = 6
+retryable = true
+hint = "A test timed out. Often timing-dependent; check for sleeps, shared state or slow fixtures."
+
+[[rule]]
+id = "test-failure.pytest"
+category = "test-failure"
+pattern = '^(FAILED|ERROR) [\w/.\-]+\.py::|=+ \d+ failed'
+weight = 6
+retryable = false
+hint = "pytest reported failing tests. Reproduce locally with the listed node ids."
+
+[[rule]]
+id = "test-failure.junit"
+category = "test-failure"
+pattern = 'Tests run: \d+, Failures: [1-9]|Tests run: \d+, Failures: \d+, Errors: [1-9]|There (are|were) test failures|\[ERROR\] Tests run:.*FAILURE'
+weight = 6
+retryable = false
+hint = "JUnit/Surefire failures. See target/surefire-reports for the stack traces."
+
+[[rule]]
+id = "test-failure.go"
+category = "test-failure"
+pattern = '^--- FAIL: |^FAIL\s+[\w./\-]+\s'
+weight = 6
+retryable = false
+hint = "go test failures. Re-run the package with -run and -v."
+
+[[rule]]
+id = "test-failure.jest"
+category = "test-failure"
+pattern = '^Tests:\s+\d+ failed|● .* › '
+weight = 6
+retryable = false
+hint = "Jest reported failing tests."
+
+[[rule]]
+id = "test-failure.cargo"
+category = "test-failure"
+pattern = '^test result: FAILED|^failures:$'
+weight = 6
+retryable = false
+hint = "cargo test failures. Run the failing test with -- --nocapture."
+
+[[rule]]
+id = "test-failure.terraform"
+category = "test-failure"
+pattern = 'Failure! \d+ passed, [1-9]\d* failed|Error: Test assertion failed'
+weight = 7
+retryable = false
+hint = "terraform test assertions failed. Read the error_message of the failing run block."
+
+# ---------------------------------------------------------------- build
+[[rule]]
+id = "compile-error.rust"
+category = "compile-error"
+pattern = '^error(\[E\d{4}\])?: |could not compile `'
+weight = 8
+retryable = false
+hint = "Rust compilation failed. The first error[Exxxx] is usually the real one."
+
+[[rule]]
+id = "compile-error.java"
+category = "compile-error"
+pattern = '(?i)COMPILATION ERROR|cannot find symbol|error: incompatible types|\[ERROR\] .*\.java:\[\d+,\d+\]'
+weight = 8
+retryable = false
+hint = "Java compilation failed. Check the first [ERROR] with a file:line."
+
+[[rule]]
+id = "compile-error.go"
+category = "compile-error"
+pattern = '^[\w./\-]+\.go:\d+:\d+: |undefined: \w+'
+weight = 8
+retryable = false
+hint = "Go compilation failed at the reported file:line."
+
+[[rule]]
+id = "compile-error.typescript"
+category = "compile-error"
+pattern = 'error TS\d{4}:|SyntaxError: '
+weight = 8
+retryable = false
+hint = "TypeScript/JavaScript syntax or type error."
+
+[[rule]]
+id = "compile-error.lint"
+category = "compile-error"
+pattern = '^Found \d+ errors?\.|^Error: .*\.tf line \d+|would reformat|ruff check failed|terraform fmt'
+weight = 5
+retryable = false
+hint = "A linter/formatter gate failed. Run the formatter locally and commit."
+
+# ---------------------------------------------------------------- dependencies
+[[rule]]
+id = "dependency.maven"
+category = "dependency"
+pattern = 'Could not resolve dependencies|Could not find artifact|Failed to collect dependencies'
+weight = 9
+retryable = false
+hint = "Maven could not resolve an artifact. Check the version exists and the repository is reachable (a 5xx makes this retryable)."
+
+[[rule]]
+id = "dependency.npm"
+category = "dependency"
+pattern = 'npm ERR! (code E404|404 Not Found|code ERESOLVE)|ERR_PNPM_|error An unexpected error occurred: "https://registry'
+weight = 9
+retryable = false
+hint = "npm/pnpm dependency resolution failed. Check the lockfile and package versions."
+
+[[rule]]
+id = "dependency.pip"
+category = "dependency"
+pattern = 'ResolutionImpossible|No matching distribution found for|Could not find a version that satisfies'
+weight = 9
+retryable = false
+hint = "pip could not resolve requirements. Pin compatible versions or update the lockfile."
+
+[[rule]]
+id = "dependency.cargo"
+category = "dependency"
+pattern = 'failed to select a version for|no matching package named|failed to get `[\w\-]+` as a dependency'
+weight = 9
+retryable = false
+hint = "Cargo dependency resolution failed. Check Cargo.toml version requirements."
+
+[[rule]]
+id = "dependency.go"
+category = "dependency"
+pattern = 'go: (downloading .*: )?(module .* not found|verifying .*: checksum mismatch)|missing go\.sum entry'
+weight = 9
+retryable = false
+hint = "Go module problem. Run go mod tidy and commit go.sum."
+
+# ---------------------------------------------------------------- security gates (fix, don't retry)
+[[rule]]
+id = "security-gate.trivy"
+category = "security-gate"
+pattern = '(?i)Total: \d+ \((UNKNOWN: \d+, )?(LOW: \d+, )?(MEDIUM: \d+, )?HIGH: [1-9]|Failures: \d+ \((HIGH|CRITICAL): [1-9]|^AVD-|^(AWS|AZU|GCP|KSV)-\d{4} \((HIGH|CRITICAL)\)'
+weight = 10
+retryable = false
+hint = "Trivy found HIGH/CRITICAL issues. Fix or upgrade; accept only with a justified ignore entry."
+
+[[rule]]
+id = "security-gate.secrets"
+category = "security-gate"
+pattern = '(?i)leaks found: [1-9]|detected (potential )?secrets?|RuleID: '
+weight = 12
+retryable = false
+hint = "A secret was detected. Revoke and rotate it first, then remove it from history."
+
+[[rule]]
+id = "security-gate.sast"
+category = "security-gate"
+pattern = '(?i)Findings: \d+ \(\d+ blocking\)|❰❰ Blocking ❱❱|semgrep.*blocking'
+weight = 10
+retryable = false
+hint = "SAST (Semgrep) reported blocking findings. Fix the code pattern or justify a nosemgrep."
+
+[[rule]]
+id = "security-gate.signature"
+category = "security-gate"
+pattern = '(?i)no matching signatures|signature verification failed|image signature verification failed|policy.*denied the request'
+weight = 10
+retryable = false
+hint = "Image signature or admission policy rejected the artefact. Deploy only images signed by the pipeline."
+
+# ---------------------------------------------------------------- configuration
+[[rule]]
+id = "configuration.permission"
+category = "configuration"
+pattern = '(?i)Resource not accessible by integration|permission denied \(publickey\)|AccessDenied|AuthorizationFailed|403 Forbidden'
+weight = 8
+retryable = false
+hint = "The job lacks a permission (token scope, IAM/RBAC). Grant the narrowest permission that fixes it."
+
+[[rule]]
+id = "configuration.missing-secret"
+category = "configuration"
+pattern = '(?i)(secret|environment variable|input) .*(is not set|is required|not found|missing)|must be set'
+weight = 6
+retryable = false
+hint = "A required secret/variable/input is missing for this workflow or environment."

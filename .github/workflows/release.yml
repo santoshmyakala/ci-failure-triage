@@ -1,0 +1,58 @@
+# Tag v* → static binaries for Linux (musl), macOS (Apple silicon) and Windows, SHA-256 sums and
+# signed SLSA build provenance, published as a GitHub release.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, ext: "" }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name=ci-failure-triage-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir "$name" && cp "target/${{ matrix.target }}/release/ci-failure-triage${{ matrix.ext }}" README.md LICENSE "$name/"
+          if [ "${{ matrix.ext }}" = ".exe" ]; then 7z a "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: ci-failure-triage-*.*z*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance (Sigstore)
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+      - run: sha256sum ci-failure-triage-* > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "ci-failure-triage-*"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" ci-failure-triage-* SHA256SUMS --repo "${{ github.repository }}" --generate-notes --verify-tag

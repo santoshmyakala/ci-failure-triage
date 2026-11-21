@@ -1,0 +1,30 @@
+# When ci fails on main, triage the failed jobs' logs and publish the verdict on the run.
+# The tool is built from main (trusted code); the logs are only data.
+name: triage-failed-runs
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  triage:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --release --locked
+      - name: Fetch the failed jobs' logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run view ${{ github.event.workflow_run.id }} --repo "${{ github.repository }}" --log-failed > failed.log
+      - name: Triage
+        run: |
+          ./target/release/ci-failure-triage failed.log --format markdown --no-exit-code >> "$GITHUB_STEP_SUMMARY"
+          ./target/release/ci-failure-triage failed.log --format github --no-exit-code

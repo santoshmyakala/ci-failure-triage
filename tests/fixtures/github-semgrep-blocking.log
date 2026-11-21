@@ -1,0 +1,6 @@
+2026-11-20T23:14:02.0000000Z Run semgrep scan --config "p/default" --metrics=off --error .
+2026-11-20T23:14:30.0000000Z     lab/db.py
+2026-11-20T23:14:30.0000001Z     ❯❱ python.lang.security.audit.formatted-sql-query.formatted-sql-query
+2026-11-20T23:14:30.0000002Z           ❰❰ Blocking ❱❱
+2026-11-20T23:14:30.0000003Z  • Findings: 2 (2 blocking)
+2026-11-20T23:14:31.0000000Z ##[error]Process completed with exit code 1.
